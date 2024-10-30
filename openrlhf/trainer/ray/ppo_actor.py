@@ -20,6 +20,11 @@ from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole
 
+from openrlhf.utils.logging_utils import init_logger
+
+from timeit import default_timer as timer
+
+logger = init_logger(__name__)
 
 class ActorPPOTrainer(PPOTrainer):
     def __init__(
@@ -145,6 +150,7 @@ class ActorPPOTrainer(PPOTrainer):
         return self.training_step_actor(experience)
 
     def _broadcast_to_vllm(self):
+        start = timer()
         # avoid OOM
         torch.cuda.empty_cache()
         model = self.actor.model.module
@@ -165,6 +171,8 @@ class ActorPPOTrainer(PPOTrainer):
                 if torch.distributed.get_rank() == 0:
                     torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                     ray.get(refs)
+        end = timer()
+        logger.info(f"broadcast to vLLM time: {end - start}s")
 
     def _save_checkpoint(self, args, tag, client_states):
         # call remote critic
@@ -392,6 +400,7 @@ class ActorModelRayActor(BasePPORole):
             torch.distributed.barrier()
             trainer._broadcast_to_vllm()
 
+        start = timer()
         trainer.fit(
             args,
             self.prompts_dataloader,
@@ -399,6 +408,8 @@ class ActorModelRayActor(BasePPORole):
             self.consumed_samples,
             self.num_update_steps_per_episodes,
         )
+        end = timer()
+        logger.info(f"ActorPPOTrainer fit time: {end - start}s")
 
     def save_model(self):
         args = self.strategy.args
